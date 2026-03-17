@@ -135,7 +135,7 @@ void log(log_level lev, details::with_source_location<std::format_string<Args...
     template <typename... Args>                                                                     \
     void log_##name(details::with_source_location<std::format_string<Args...>> fmt, Args&&... args) \
     {                                                                                               \
-        return log(log_level::name, std::move(fmt), std::forward<Args>(args)...);         \
+        return log(log_level::name, std::move(fmt), std::forward<Args>(args)...);                   \
     }
 FOREACH_LOG_LEVEL(_FUNCTION)
 #undef _FUNCTION

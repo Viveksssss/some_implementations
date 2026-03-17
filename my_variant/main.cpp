@@ -12,6 +12,11 @@ struct BadVariantAccess : std::exception {
     }
 };
 
+template <std::size_t I>
+struct InPlcaeIndex {
+    InPlcaeIndex() = default;
+};
+
 template <typename, typename>
 struct VariantIndex { };
 template <typename, size_t>
@@ -41,10 +46,103 @@ private:
         return destructors;
     }
 
+    static void (**move_constructors() noexcept)(char*, char*) noexcept
+    {
+        static void (*move_constructors[max_size()])(char*, char*) noexcept = {
+            [](char* union_dst, char* union_src) noexcept {
+                new (union_dst) Ts(std::move(*reinterpret_cast<Ts*>(union_src)));
+            }...
+        };
+        return move_constructors;
+    }
+    static void (**move_assignment_constructors() noexcept)(char*, char*) noexcept
+    {
+        static void (*move_assignment_constructors[max_size()])(char*) noexcept = {
+            [](char* union_dst, char* union_src) noexcept {
+                *reinterpret_cast<Ts*>(union_dst) = std::move(*reinterpret_cast<Ts*>(union_src));
+            }...
+        };
+        return move_assignment_constructors;
+    }
+
+    static void (**copy_constructors() noexcept)(char*, const char*) noexcept
+    {
+        static void (*copy_constructors[max_size()])(char*, const char*) noexcept = {
+            [](char* union_dst, const char* union_src) noexcept {
+                new (union_dst) Ts(*reinterpret_cast<Ts const*>(union_src));
+            }...
+        };
+        return copy_constructors;
+    }
+    static void (**copy_assignment_constructors() noexcept)(char*, const char*) noexcept
+    {
+        static void (*copy_assignment_constructors[max_size()])(char*, const char*) noexcept = {
+            [](char* union_dst, const char* union_src) noexcept {
+                *reinterpret_cast<Ts*>(union_dst) = *reinterpret_cast<Ts const*>(union_src);
+            }...
+        };
+        return copy_assignment_constructors;
+    }
+
+    template <typename Lambda>
+    static typename std::common_type<typename std::invoke_result<Lambda, Ts&>::type...>::type (**visitable_c() noexcept)(const char*, Lambda) noexcept
+    {
+        static void (*visitable[max_size()])(const char*, Lambda) noexcept = {
+            [](const char* m_union, Lambda lambda) noexcept -> typename std::common_type<typename std::invoke_result<Lambda, Ts&>::type...>::type {
+                return lambda(*reinterpret_cast<const Ts*>(m_union));
+            }...
+        };
+        return visitable;
+    }
+
+    template <typename Lambda>
+    static typename std::common_type<typename std::invoke_result<Lambda, Ts&>::type...>::type (**visitable() noexcept)(char*, Lambda) noexcept
+    {
+        using visit_return_type = typename std::common_type<typename std::invoke_result<Lambda, Ts&>::type...>::type;
+
+        static visit_return_type (*visitable[max_size()])(char*, Lambda) noexcept = {
+            [](char* m_union, Lambda lambda) noexcept -> visit_return_type {
+                return lambda(*reinterpret_cast<Ts*>(m_union));
+            }...
+        };
+        return visitable;
+    }
+
 public:
     ~Variant() noexcept
     {
         get_variant_destructors()[m_index](m_union);
+    }
+
+    Variant(Variant&& other)
+        : m_index(other.m_index)
+    {
+        move_constructors()[m_index](m_union, other.m_union);
+    }
+    Variant& operator=(Variant&& other)
+
+    {
+        m_index = other.m_index;
+        move_assignment_constructors()[m_index](m_union, other.m_union);
+    }
+
+    Variant(Variant const& other)
+        : m_index(other.m_index)
+    {
+        copy_constructors()[m_index](m_union, other.m_union);
+    }
+
+    Variant& operator=(Variant const& other)
+    {
+        m_index = other.m_index;
+        copy_assignment_constructors()[index()](m_union, other.m_union);
+    }
+
+    template <std::size_t I, typename... Args>
+    Variant(InPlcaeIndex<I>, Args&&... value_types)
+        : m_index(I)
+    {
+        new (m_union) typename VariantAlternative<Variant, I>::type(std::forward<Args>(value_types)...);
     }
 
 #if __cplusplus >= 202002L
@@ -65,9 +163,6 @@ public:
         new (p) T(value);
     }
 #endif
-
-    Variant(Variant const&) = delete;
-    Variant& operator=(Variant const&) = delete;
 
     constexpr size_t index() const
     {
@@ -97,6 +192,40 @@ public:
     {
         return get<VariantIndex<Variant, T>::value>();
     }
+
+    //
+    template <class Lambda>
+    typename std::common_type<typename std::invoke_result<Lambda, Ts&>::type...>::type visit(Lambda lambda) const
+    {
+        return visitable_c<Lambda>()[m_index]((m_union), lambda);
+    }
+
+    template <class Lambda>
+    typename std::common_type<typename std::invoke_result<Lambda, Ts&>::type...>::type visit(Lambda lambda)
+    {
+        using visit_return_type = typename std::common_type<typename std::invoke_result<Lambda, Ts&>::type...>::type;
+        return visitable<Lambda>()[m_index]((m_union), lambda);
+    }
+
+    template <std::size_t I>
+    auto get_if() const -> typename VariantAlternative<Variant, I>::type const*
+    {
+        static_assert(I < sizeof...(Ts), "I out of range!");
+        if (m_index != I) {
+            return nullptr;
+        }
+        return reinterpret_cast<typename VariantAlternative<Variant, I>::type const*>(m_union);
+    }
+
+    template <std::size_t I>
+    auto get_if() -> typename VariantAlternative<Variant, I>::type*
+    {
+        static_assert(I < sizeof...(Ts), "I out of range!");
+        if (m_index != I) {
+            return nullptr;
+        }
+        return reinterpret_cast<typename VariantAlternative<Variant, I>::type*>(m_union);
+    }
 };
 
 template <typename T, typename... Ts>
@@ -122,11 +251,9 @@ struct VariantAlternative<Variant<T, Ts...>, I> {
 int main()
 {
     Variant<int, double, std::string> var = std::string("SAdsad");
-    std::cout << var.get<std::string>() << std::endl;
-    Variant<int, double, std::string> var1 = 5.555;
-    std::cout << var1.get<double>() << std::endl;
-    Variant<int, double, std::string> var2 = 232;
-    std::cout << var2.get<int>() << std::endl;
-
-    std::cout << var.index() << "\t" << var1.index() << "\t" << var2.index() << std::endl;
+    auto p = var.visit([](auto a) {
+        std::cout << a << std::endl;
+        return "asd";
+    });
+    std::cout << p << std::endl;
 }
