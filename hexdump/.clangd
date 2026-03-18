@@ -1,0 +1,4 @@
+CompileFlags:
+    Add: [-std=c++23]
+    # 如果使用 GCC 编译，可以指定编译器
+    Compiler: g++
