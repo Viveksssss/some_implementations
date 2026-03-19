@@ -10,6 +10,13 @@ auto functory(int a) -> optional<int> {
     }
 }
 
+struct ss {
+    int a;
+    int b;
+
+    ss(int a, int b) : a(a), b(b) {}
+};
+
 int main(int, char **) {
     optional<std::vector<int>> o1({1, 2, 3, 4, 54, 6, 7, 8});
     if (o1) {
@@ -26,6 +33,15 @@ int main(int, char **) {
     }
 
     std::cout << std::endl;
+
+    optional<std::vector<int>> o3({1, 2, 3, 4, 5, 6, 7, 8, 9});
+    if (o3) {
+        for (auto &p: o3.value()) {
+            std::cout << p << " ";
+        }
+    }
+
+    optional<ss> o4(inplace, 2, 3);
 
     long long int a;
     while (std::cin >> a) {

@@ -43,6 +43,8 @@ public:
         new (&_value) T(value);
     }
 
+    optional() noexcept : optional(nullopt) {}
+
     optional(nullopt_t) noexcept : _has_value(false) {}
 
     template <typename... Args>
@@ -76,11 +78,11 @@ public:
         return *this;
     }
 
-    optional &operator=(T &&_value) noexcept {
+    optional &operator=(T &&value) noexcept {
         if (_has_value) {
-            _value = std::move(_value);
+            _value = std::move(value);
         } else {
-            new (&_value) T(std::move(_value));
+            new (&_value) T(std::move(value));
             _has_value = true;
         }
         return *this;
