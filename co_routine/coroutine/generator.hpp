@@ -1,89 +1,12 @@
-// // #include "coroutine/generator.hpp"
-// #include "coroutine/executor.hpp"
-// #include "coroutine/Task.hpp"
-#include <chrono>
+#pragma once
+
+#include <algorithm>
 #include <coroutine>
+#include <exception>
+#include <initializer_list>
 #include <iostream>
-#include <print>
-#include <thread>
+#include <type_traits>
 #include <utility>
-
-// // Generator<int> sequnence() {
-// //     int i = 0;
-// //     while (i < 4) {
-// //         co_yield i++;
-// //     }
-// //     co_return 5;
-// // }
-
-// // Generator<int> fibonacci() {
-// //     co_yield 0;
-// //     co_yield 1;
-// //     int a = 0, b = 1;
-// //     while (true) {
-// //         co_yield a + b;
-// //         b = a + b;
-// //         a = b - a;
-// //     }
-// // }
-
-// struct out {
-//     template <typename T>
-//     void operator()(T const &value, char separator = ' ') {
-//         std::cout << value << separator;
-//     };
-// };
-
-// struct outln {
-//     template <typename T>
-//     void operator()(T const &value) {
-//         std::cout << value << std::endl;
-//     };
-// };
-
-// static inline outln outln;
-// static inline out out;
-
-// Task<int,NoopExecutor> simple_task2() {
-//     std::println("task 2 start ...");
-//     using namespace std::chrono_literals;
-//     std::this_thread::sleep_for(1s);
-//     std::println("task 2 returns after 1s.");
-//     co_return 2;
-// }
-
-// Task<int,NoopExecutor> simple_task3() {
-//     std::println("in task 3 start ...");
-//     using namespace std::chrono_literals;
-//     std::this_thread::sleep_for(2s);
-//     std::println("task 3 returns after 2s.");
-//     co_return 3;
-// }
-
-// Task<int, NoopExecutor> simple_task() {
-//     std::println("task start ...");
-//     auto result2 = co_await simple_task2();
-//     std::println("returns from task2: {}", result2);
-//     auto result3 = co_await simple_task3();
-//     std::println("returns from task3: {}", result3);
-//     co_return 1 + result2 + result3;
-// }
-
-// int main() {
-//     auto simpleTask = simple_task();
-//     simpleTask.then([](int i) { std::println("simple task end: {}", i); })
-//         .catching([](std::exception &e) {
-//             std::println("error occurred", e.what());
-//         });
-//     try {
-//         auto i = simpleTask.get_result();
-//         std::println("simple task end from get:{} ", i);
-//     } catch (std::exception &e) {
-//         std::println("error: {}", e.what());
-//     }
-
-//     return 0;
-// }
 
 template <typename T, typename = void>
 struct is_range : std::false_type { };
@@ -101,6 +24,7 @@ struct Generator {
     struct promise_type {
         T value;
         bool has_value = false;
+        std::coroutine_handle<> caller;
         std::exception_ptr e;
 
         Generator get_return_object() noexcept {
@@ -113,6 +37,9 @@ struct Generator {
         }
 
         std::suspend_always final_suspend() noexcept {
+            if (caller && !caller.done()) {
+                caller.resume();
+            }
             return {};
         }
 
@@ -131,13 +58,35 @@ struct Generator {
             return value;
         }
 
-        std::suspend_always await_transform(T value) {
-            this->value = value;
-            return {};
-        };
+        template <typename Ts>
+        auto await_transform(Ts &&gen) {
+            struct Awaitable {
+                std::coroutine_handle<promise_type> g;
 
-        void unhandled_exception() noexcept {
+                bool await_ready() {
+                    return g.done();
+                }
+
+                void await_suspend(std::coroutine_handle<> h) {
+                    g.promise().caller = h;
+                    g.resume();
+                    std::cout << "h:" << &h << std::endl;
+                }
+
+                T await_resume() {
+                    return g.promise().get_value();
+                }
+            };
+
+            return Awaitable{gen.handle};
+        }
+
+        void unhandled_exception() noexcept { 
             e = std::current_exception();
+        }
+
+        void set_value(T v) noexcept {
+            value = v;
         }
     };
 
@@ -155,7 +104,7 @@ struct Generator {
         : handle(std::exchange(other.handle, {})) { };
 
     Generator &operator=(Generator &&other) noexcept {
-        handle = std::__atomic_impl::exchange(other.handle, {});
+        handle = std::exchange(other.handle, {});
         return *this;
     }
 
@@ -180,6 +129,7 @@ struct Generator {
         if (handle.done()) {
             return false;
         }
+
         if (!handle.promise().has_value) {
             handle.resume();
         }
@@ -212,6 +162,7 @@ struct Generator {
 
     template <typename F>
     Generator<std::invoke_result_t<F, T>> map(F &&f) {
+        // auto up_stream = std::move(*this);
         while (has_next()) {
             co_yield f(next());
         }
@@ -271,58 +222,92 @@ struct Generator {
 
     template <typename Func>
     Generator take_while(Func &&f) {
-        // auto up = std::move(*this);
         while (has_next() && f(next())) {
-            while (has_next() && f(next())) {
-                co_yield next();
+            co_yield next();
+        }
+    }
+};
+
+template <typename T>
+struct Result {
+    Result(T &&value) : _value(std::forward<T>(value)) { }
+
+    Result(std::exception_ptr &&e) : _exception_ptr(e) { }
+
+    T get_or_throw() {
+        if (_exception_ptr) {
+            std::rethrow_exception(_exception_ptr);
+        }
+        return _value;
+    }
+
+private:
+    T _value;
+    std::exception_ptr _exception_ptr;
+};
+
+// template<typename T>
+template <typename T>
+struct Task {
+    struct promise_type {
+        std::optional<Result<T>> result;
+        template <typename R>
+        struct TaskAwaiter {
+            explicit TaskAwaiter(Task<R> &&task) noexcept
+                : task(std::move(task)) { }
+
+            TaskAwaiter(TaskAwaiter &&completion) noexcept
+                : task(std::exchange(completion.task, {})) { }
+
+            TaskAwaiter(TaskAwaiter &) = delete;
+
+            TaskAwaiter &operator=(TaskAwaiter &) = delete;
+
+            constexpr bool await_ready() const noexcept {
+                return false;
             }
+
+            void await_suspend(std::coroutine_handle<> handle) noexcept {
+                // 当 task 执行完之后调用 resume
+                task.finally([handle]() { handle.resume(); });
+            }
+
+            // 协程恢复执行时，被等待的 Task 已经执行完，调用 get_result
+            // 来获取结果
+            R await_resume() noexcept {
+                return task.get_result();
+            }
+
+        private:
+            Task<R> task;
+        };
+
+        std::suspend_never initial_suspend() {
+            return {};
         }
-    }
-};
 
-struct ss {
-    int value = 1;
-
-    ss(int value) {
-        this->value = value;
-    }
-
-    ss &operator=(ss const &s) {
-        std::cout << "asd" << std::endl;
-        return *this;
-    }
-
-    ss plus(int a) {
-        value += a;
-        std::cout << "plus\n";
-        return ss{value};
-    }
-
-    ss multi(int a) {
-        std::cout << "multi\n";
-        value *= a;
-        return ss{value};
-    }
-
-    ss(ss const &s) {
-        std::cout << "asd" << std::endl;
-        value = s.value;
-    }
-
-    ~ss() {
-        std::cout << "destory:" << value << std::endl;
-    }
-};
-
-int main() {
-    {
-        auto p = Generator<int>::from_array(1, 2, 3, 4, 5)
-                     .map([](int i) { return i * 2; })
-                     .filter([](int i) { return i % 3 == 0; })
-                     .take(10);
-
-        while (p.has_next()) {
-            std::cout << p.next() << std::endl;
+        std::suspend_always final_suspend() noexcept {
+            return {};
         }
-    }
-}
+
+        Task<T> get_return_object() {
+            return Task<T>{
+                std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+
+        void unhandled_exception() noexcept {
+            result = std::make_optional<Result<T>>(std::current_exception());
+        }
+
+        void return_value(T &&value) noexcept {
+            result = std::make_optional<Result<T>>(std::forward<T>(value));
+        }
+
+        template <typename U>
+        TaskAwaiter<U> await_transform(U &&u) {
+            return TaskAwaiter<U>{std::forward<U>(u)};
+        }
+    };
+
+    std::coroutine_handle<promise_type> handle;
+};
