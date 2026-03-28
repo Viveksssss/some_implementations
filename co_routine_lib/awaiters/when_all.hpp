@@ -2,11 +2,11 @@
 
 #include "awaiter.hpp"
 #include "Task.hpp"
+#include <array>
 #include <coroutine>
 #include <cstddef>
 #include <exception>
 #include <span>
-#include <array>
 #include <tuple>
 
 struct WhenAllCounter {
@@ -17,7 +17,7 @@ struct WhenAllCounter {
 
 template <typename T>
 ReturnPreviousTask WhenAllHelper(
-    Task<T> const &t, WhenAllCounter &counter, Uninitialized<T> &tt) {
+    auto &&t, WhenAllCounter &counter, Uninitialized<T> &tt) {
     try {
         if constexpr (std::is_void_v<T>) {
             co_await t;
@@ -82,9 +82,11 @@ Task<std::tuple<typename AwaitableTraits<Ts>::NonVoidRetType...>> whenAllImpl(
         std::get<Is>(result).moveValue()...);
 }
 
+namespace co_async {
 template <Awaitable... Ts>
     requires(sizeof...(Ts) != 0)
 auto when_all(Ts &&...ts) {
     return whenAllImpl(
         std::make_index_sequence<sizeof...(Ts)>{}, std::forward<Ts>(ts)...);
 }
+} // namespace co_async

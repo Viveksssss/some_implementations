@@ -5,6 +5,7 @@
 #include <chrono>
 #include <coroutine>
 #include <exception>
+#include <fcntl.h>
 
 template <typename T>
 struct Promise {
@@ -20,11 +21,11 @@ struct Promise {
         exception = std::current_exception();
     }
 
-    void return_value(T v) {
+    void return_value(T const &v) {
         mResult.putValue(v);
     }
 
-    auto result() {
+    T result() {
         if (exception) [[unlikely]] {
             std::rethrow_exception(exception);
         }
@@ -112,19 +113,22 @@ struct SleepUntilPromise : RbTree<SleepUntilPromise>::RbNode, Promise<void> {
     std::chrono::system_clock::time_point expireTime;
 };
 
+namespace co_async {
 
+using EpollEventMask = std::uint32_t;
 
-namespace co_async{
+struct EpollFilePromise : Promise<EpollEventMask> {
+    auto get_return_object() {
+        return std::coroutine_handle<EpollFilePromise>::from_promise(*this);
+    }
 
-    struct EpollFilePromise : Promise<void> {
-        auto get_return_object() {
-            return std::coroutine_handle<EpollFilePromise>::from_promise(*this);
-        }
-        
-        EpollFilePromise &operator=(EpollFilePromise &&) = delete;
-        
-        int fileno;
-        uint32_t events;
-    };
-    
-}
+    EpollFilePromise &operator=(EpollFilePromise &&) = delete;
+
+    int fileno;
+    uint32_t events;
+    struct EpollLoop *loop;
+
+    ~EpollFilePromise();
+};
+
+} // namespace co_async

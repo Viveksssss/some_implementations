@@ -2,10 +2,9 @@
 
 #include "Promise.hpp"
 #include <coroutine>
-#include <type_traits>
 
 template <typename T = void, class P = Promise<T>>
-struct Task {
+struct [[nodiscard]] Task {
     using promise_type = P;
 
     Task(std::coroutine_handle<promise_type> coroutine)
@@ -65,3 +64,12 @@ struct ReturnPreviousTask {
 
     std::coroutine_handle<> mCoroutine;
 };
+
+namespace co_async {
+template <typename Loop, typename T, typename P>
+void run_task(Loop &loop, Task<T, P> const &t) {
+    t.mCoroutine.resume();
+    while (loop.run())
+        ;
+}
+}; // namespace co_async

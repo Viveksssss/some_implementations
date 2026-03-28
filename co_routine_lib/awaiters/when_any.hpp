@@ -1,12 +1,14 @@
 #pragma once
 
 #include "awaiter.hpp"
+#include "common.hpp"
 #include "Task.hpp"
 #include <array>
 #include <coroutine>
 #include <cstddef>
 #include <span>
 #include <tuple>
+#include <utility>
 #include <variant>
 
 struct WhenAnyCounter {
@@ -17,7 +19,7 @@ struct WhenAnyCounter {
 };
 
 template <typename T>
-ReturnPreviousTask WhenAnyHelper(Task<T> const &t, WhenAnyCounter &counter,
+ReturnPreviousTask WhenAnyHelper(auto &&t, WhenAnyCounter &counter,
     Uninitialized<T> &tt, std::size_t index) {
     try {
         if constexpr (std::is_void_v<T>) {
@@ -78,13 +80,21 @@ Task<std::variant<typename AwaitableTraits<Ts>::NonVoidRetType...>> whenAnyImpl(
     co_await WhenAnyAwaiter(counter, tasks);
 
     // 直接构造 variant，不使用 Uninitialized 包装
-    std::variant<typename AwaitableTraits<Ts>::NonVoidRetType...> var;
+    Uninitialized<std::variant<typename AwaitableTraits<Ts>::NonVoidRetType...>>
+        var;
     // 使用逗号表达式和折叠表达式来设置正确的值
-    ((counter.index == Is && (var = std::get<Is>(result).moveValue(), true)),
+    ((counter.index == Is
+         && (var.putValue(
+                 std::in_place_index<Is>, std::get<Is>(result).moveValue()),
+             0)),
         ...);
+    // ((counter.index == Is && (var = std::get<Is>(result).moveValue(), true)),
+    //     ...);
 
-    co_return var;
+    co_return var.moveValue();
 }
+
+namespace co_async {
 
 template <Awaitable... Ts>
     requires(sizeof...(Ts) != 0)
@@ -92,3 +102,5 @@ auto when_any(Ts... ts) {
     return whenAnyImpl(
         std::make_index_sequence<sizeof...(Ts)>{}, std::forward<Ts>(ts)...);
 }
+
+} // namespace co_async

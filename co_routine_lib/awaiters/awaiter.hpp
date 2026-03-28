@@ -21,12 +21,16 @@ concept Awaitable = Awaiter<A> || requires(A a) {
 };
 
 template <class A>
-struct AwaitableTraits;
+struct AwaitableTraits {
+    using Type = A;
+};
 
 template <Awaiter A>
 struct AwaitableTraits<A> {
     using RetType = decltype(std::declval<A>().await_resume());
     using NonVoidRetType = NonVoidHelper<RetType>::Type;
+    using Type = RetType;
+    using AwaiterType = A;
 };
 
 template <class A>
@@ -51,7 +55,7 @@ struct SleepAwaiter {
 
 private:
     std::chrono::system_clock::time_point mTimePoint;
-    Scheduler &loop;
+    co_async::TimerLoop &loop;
 };
 
 struct RepeatAwaiter {
@@ -76,27 +80,3 @@ struct RepeatAwaitable {
         return RepeatAwaiter();
     }
 };
-
-namespace co_async {
-struct EpollFileAwaiter {
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    void await_suspend(
-        std::coroutine_handle<EpollFilePromise> coroutine) const noexcept {
-        auto &promise = coroutine.promise();
-        promise.fileno = fileno;
-        promise.events = events;
-        loop.add_listener(promise);
-    }
-
-    void await_resume() const noexcept { }
-
-    using ClockType = std::chrono::system_clock;
-    EpollLoop &loop;
-    int fileno;
-    uint32_t events;
-};
-
-} // namespace co_async
