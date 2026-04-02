@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../utils/debug.hpp"
 #include "Promise.hpp"
 #include <coroutine>
 
@@ -68,8 +69,18 @@ struct ReturnPreviousTask {
 namespace co_async {
 template <typename Loop, typename T, typename P>
 void run_task(Loop &loop, Task<T, P> const &t) {
-    t.mCoroutine.resume();
+    // t.mCoroutine.resume();
+    // while (loop.run()) { }
+    auto a = t.operator co_await();
+    a.await_suspend(std::noop_coroutine()).resume();
     while (loop.run())
         ;
+    return a.await_resume();
 }
+
+template <class Loop, class T, class P>
+void spawn_task(Loop &loop, Task<T, P> const &t) {
+    t.mCoroutine.resume();
+}
+
 }; // namespace co_async

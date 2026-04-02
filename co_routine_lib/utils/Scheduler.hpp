@@ -10,6 +10,7 @@
 #include <coroutine>
 #include <cstring>
 #include <sys/epoll.h>
+#include <sys/stat.h>
 #include <termios.h>
 #include <thread>
 
@@ -208,42 +209,66 @@ private:
     int fileno;
 };
 
-inline std::size_t readFileSync(AsyncFile const &file, std::span<char> buffer) {
-    return checkErrorNonBlock(
-        read(file.fileNo(), buffer.data(), buffer.size()));
-}
-
 inline Task<EpollEventMask, EpollFilePromise> wait_file_event(
     EpollLoop &loop, AsyncFile const &file, EpollEventMask events) {
     co_return co_await EpollFileAwaiter(loop, file.fileNo(), events);
 }
 
+inline std::size_t readFileSync(AsyncFile const &file, std::span<char> buffer) {
+    return checkErrorNonBlock(
+        read(file.fileNo(), buffer.data(), buffer.size()));
+}
+
+inline std::size_t writeFileSync(
+    AsyncFile const &file, std::span<char const> buffer) {
+    return checkErrorNonBlock(
+        write(file.fileNo(), buffer.data(), buffer.size()));
+}
+
+inline bool need_async_wait(int fd) {
+    struct stat st;
+    fstat(fd, &st);
+    // 普通文件和目录不需要 epoll
+    return !S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode);
+}
+
 inline Task<std::size_t> read_file(
     EpollLoop &loop, AsyncFile const &file, std::span<char> buffer) {
-    co_await wait_file_event(loop, file, EPOLLIN);
+    if (need_async_wait(file.fileNo())) {
+        co_await wait_file_event(loop, file, EPOLLIN | EPOLLRDHUP);
+    }
     auto len = readFileSync(file, buffer);
     co_return len;
 }
 
-inline Task<std::string> read_string(
-    EpollLoop &loop, co_async::AsyncFile &file) {
-    co_await wait_file_event(loop, file, EPOLLIN | EPOLLET);
-    std::string s;
-    std::size_t chunk_size = 8;
-    while (true) {
-        std::size_t exist = s.size();
-        s.resize(exist + chunk_size);
-        std::span<char> buffer(s.data() + exist, chunk_size);
-        auto len = co_await read_file(loop, file, buffer);
-        if (len != chunk_size) {
-            s.resize(exist + len);
-            break;
-        }
-        if (chunk_size < 65536) {
-            chunk_size *= 4;
-        }
+inline Task<std::size_t> write_file(
+    EpollLoop &loop, AsyncFile &file, std::span<char const> buffer) {
+    if (need_async_wait(file.fileNo())) {
+        co_await wait_file_event(loop, file, EPOLLOUT | EPOLLRDHUP);
     }
-    co_return s;
+    auto len = writeFileSync(file, buffer);
+    co_return len;
 }
+
+// inline Task<std::string> read_string(
+//     EpollLoop &loop, co_async::AsyncFile &file) {
+//     co_await wait_file_event(loop, file, EPOLLIN | EPOLLET);
+//     std::string s;
+//     std::size_t chunk_size = 8;
+//     while (true) {
+//         std::size_t exist = s.size();
+//         s.resize(exist + chunk_size);
+//         std::span<char> buffer(s.data() + exist, chunk_size);
+//         auto len = co_await read_file(loop, file, buffer);
+//         if (len != chunk_size) {
+//             s.resize(exist + len);
+//             break;
+//         }
+//         if (chunk_size < 65536) {
+//             chunk_size *= 4;
+//         }
+//     }
+//     co_return s;
+// }
 
 }; // namespace co_async

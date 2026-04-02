@@ -25,6 +25,10 @@ struct Promise {
         mResult.putValue(v);
     }
 
+    void return_value(T &&v) {
+        mResult.putValue(std::move(v));
+    }
+
     T result() {
         if (exception) [[unlikely]] {
             std::rethrow_exception(exception);

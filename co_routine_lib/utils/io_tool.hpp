@@ -1,5 +1,6 @@
 #pragma once
 
+#include "debug.hpp"
 #include <source_location>
 #include <string>
 #include <system_error>
